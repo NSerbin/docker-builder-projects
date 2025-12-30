@@ -1,0 +1,116 @@
+name: Build Docker Image
+
+on:
+  repository_dispatch:
+    types: [builder.build]
+
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: "Repo name (must exist in projects.yml)"
+        required: true
+        type: string
+      source_repo:
+        description: "ORG/REPO"
+        required: true
+        type: string
+      ref:
+        description: "Git ref (branch / tag / sha)"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_name: ${{ steps.cfg.outputs.repo_name }}
+      source_repo: ${{ steps.cfg.outputs.source_repo }}
+      ref: ${{ steps.cfg.outputs.ref }}
+      registry: ${{ steps.cfg.outputs.registry }}
+      image_name: ${{ steps.cfg.outputs.image_name }}
+      platforms: ${{ steps.cfg.outputs.platforms }}
+      dockerfile_mode: ${{ steps.cfg.outputs.dockerfile_mode }}
+      dockerfile_path: ${{ steps.cfg.outputs.dockerfile_path }}
+      build_context: ${{ steps.cfg.outputs.build_context }}
+      docker_tag: ${{ steps.tag.outputs.docker_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - id: cfg
+        name: Load project config
+        env:
+          REPO_NAME: ${{ github.event.client_payload.repo_name || github.event.inputs.repo_name }}
+          SOURCE_REPO: ${{ github.event.client_payload.source_repo || github.event.inputs.source_repo }}
+          REF: ${{ github.event.client_payload.ref || github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+
+          if ! yq -e ".projects.${REPO_NAME}" projects.yml >/dev/null; then
+            echo "Project ${REPO_NAME} not found in projects.yml"
+            exit 1
+          fi
+
+          REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry" projects.yml)"
+          IMAGE_NAME="$(yq -r ".projects.${REPO_NAME}.docker.image_name" projects.yml)"
+          PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms" projects.yml)"
+
+          DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.mode" projects.yml)"
+          DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path" projects.yml)"
+          CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context" projects.yml)"
+
+          {
+            echo "repo_name=${REPO_NAME}"
+            echo "source_repo=${SOURCE_REPO}"
+            echo "ref=${REF}"
+            echo "registry=${REGISTRY}"
+            echo "image_name=${IMAGE_NAME}"
+            echo "platforms=${PLATFORMS}"
+            echo "dockerfile_mode=${DF_MODE}"
+            echo "dockerfile_path=${DF_PATH}"
+            echo "build_context=${CONTEXT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: tag
+        name: Compute docker tag
+        run: |
+          set -euo pipefail
+          REF="${{ steps.cfg.outputs.ref }}"
+
+          if echo "$REF" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
+            TAG="$REF"
+          else
+            TAG="sha-$(echo $GITHUB_SHA | cut -c1-7)"
+          fi
+
+          echo "docker_tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    uses: NSerbin/github-pipelines/.github/workflows/docker-build.yml@main
+    with:
+      registry: ${{ needs.prepare.outputs.registry }}
+      repository-name: ${{ needs.prepare.outputs.image_name }}
+      docker-tag: ${{ needs.prepare.outputs.docker_tag }}
+      docker-architecture: ${{ needs.prepare.outputs.platforms }}
+
+      clone-source: true
+      source-repo: ${{ needs.prepare.outputs.source_repo }}
+      source-ref: ${{ needs.prepare.outputs.ref }}
+
+      dockerfile-mode: ${{ needs.prepare.outputs.dockerfile_mode }}
+      dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
+      build-context: ${{ needs.prepare.outputs.build_context }}
+
+      linter-fail: true
+
+    secrets: inherit
