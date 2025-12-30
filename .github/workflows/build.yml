@@ -96,7 +96,8 @@ jobs:
 
   build:
     needs: prepare
-    uses: NSerbin/github-pipelines/.github/workflows/docker-build.yml@main
+    uses: NSerbin/gh-pipelines/.github/workflows/docker-build.yml@main
+    
     with:
       registry: ${{ needs.prepare.outputs.registry }}
       repository-name: ${{ needs.prepare.outputs.image_name }}
