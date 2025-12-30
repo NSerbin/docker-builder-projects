@@ -1,0 +1,14 @@
+projects:
+  freedium-web:
+    docker:
+      registry: ghcr
+      image_name: freedium-web
+      platforms: linux/amd64
+
+      # usamos Dockerfile del repo origen
+      dockerfile:
+        mode: source        # source | auto | fallback
+        path: Dockerfile
+
+      build:
+        context: .
