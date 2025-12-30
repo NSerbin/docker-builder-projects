@@ -16,5 +16,4 @@ projects:
       chart_path: "charts/freedium"     
       values_file: "values.yaml"
       update_app_version: true
-      set_image_repository: true
       image_repository: "ghcr.io/nserbin/freedium-web"
