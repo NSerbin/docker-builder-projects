@@ -76,7 +76,12 @@ jobs:
           DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path" projects.yml)"
           CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context" projects.yml)"
 
-          HELM_ENABLED="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
+          HELM_ENABLED_RAW="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
+          if [ "${HELM_ENABLED_RAW}" = "true" ] || [ "${HELM_ENABLED_RAW}" = "True" ]; then
+            HELM_ENABLED="true"
+          else
+            HELM_ENABLED="false"
+          fi
           CHARTS_REPO="$(yq -r ".projects.${REPO_NAME}.helm.charts_repo // \"\"" projects.yml)"
           CHARTS_REF="$(yq -r ".projects.${REPO_NAME}.helm.charts_ref // \"main\"" projects.yml)"
           CHART_PATH="$(yq -r ".projects.${REPO_NAME}.helm.chart_path // \"\"" projects.yml)"
