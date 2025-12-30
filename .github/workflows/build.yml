@@ -103,7 +103,7 @@ jobs:
       repository-name: ${{ needs.prepare.outputs.image_name }}
       docker-tag: ${{ needs.prepare.outputs.docker_tag }}
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
-
+      ghcr-owner: nserbin
       clone-source: true
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
