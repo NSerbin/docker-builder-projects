@@ -3,7 +3,6 @@ name: Build Docker Image
 on:
   repository_dispatch:
     types: [builder.build]
-
   workflow_dispatch:
     inputs:
       repo_name:
@@ -30,12 +29,20 @@ jobs:
       repo_name: ${{ steps.cfg.outputs.repo_name }}
       source_repo: ${{ steps.cfg.outputs.source_repo }}
       ref: ${{ steps.cfg.outputs.ref }}
+
       registry: ${{ steps.cfg.outputs.registry }}
-      image_name: ${{ steps.cfg.outputs.image_name }}
       platforms: ${{ steps.cfg.outputs.platforms }}
-      dockerfile_mode: ${{ steps.cfg.outputs.dockerfile_mode }}
-      dockerfile_path: ${{ steps.cfg.outputs.dockerfile_path }}
-      build_context: ${{ steps.cfg.outputs.build_context }}
+
+      web_image_name: ${{ steps.cfg.outputs.web_image_name }}
+      web_df_mode: ${{ steps.cfg.outputs.web_df_mode }}
+      web_df_path: ${{ steps.cfg.outputs.web_df_path }}
+      web_context: ${{ steps.cfg.outputs.web_context }}
+
+      caddy_image_name: ${{ steps.cfg.outputs.caddy_image_name }}
+      caddy_df_mode: ${{ steps.cfg.outputs.caddy_df_mode }}
+      caddy_df_path: ${{ steps.cfg.outputs.caddy_df_path }}
+      caddy_context: ${{ steps.cfg.outputs.caddy_context }}
+
       docker_tag: ${{ steps.tag.outputs.docker_tag }}
 
       helm_enabled: ${{ steps.cfg.outputs.helm_enabled }}
@@ -44,15 +51,14 @@ jobs:
       chart_path: ${{ steps.cfg.outputs.chart_path }}
       values_file: ${{ steps.cfg.outputs.values_file }}
       update_app_version: ${{ steps.cfg.outputs.update_app_version }}
-      image_repository: ${{ steps.cfg.outputs.image_repository }}
+      helm_updates_json: ${{ steps.cfg.outputs.helm_updates_json }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install yq
         run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
       - id: cfg
@@ -70,34 +76,40 @@ jobs:
           fi
 
           REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry" projects.yml)"
-          IMAGE_NAME="$(yq -r ".projects.${REPO_NAME}.docker.image_name" projects.yml)"
           PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms" projects.yml)"
-          DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.mode" projects.yml)"
-          DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path" projects.yml)"
-          CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context" projects.yml)"
 
-          # --- normalize helm.enabled to string "true"/"false"
+          WEB_IMAGE="$(yq -r ".projects.${REPO_NAME}.docker.images.web.image_name" projects.yml)"
+          WEB_DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.images.web.dockerfile.mode" projects.yml)"
+          WEB_DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.images.web.dockerfile.path" projects.yml)"
+          WEB_CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.images.web.build.context" projects.yml)"
+
+          CADDY_IMAGE="$(yq -r ".projects.${REPO_NAME}.docker.images.caddy.image_name" projects.yml)"
+          CADDY_DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.images.caddy.dockerfile.mode" projects.yml)"
+          CADDY_DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.images.caddy.dockerfile.path" projects.yml)"
+          CADDY_CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.images.caddy.build.context" projects.yml)"
+
           HELM_ENABLED_RAW="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
-          if [ "${HELM_ENABLED_RAW}" = "true" ] || [ "${HELM_ENABLED_RAW}" = "True" ]; then
-            HELM_ENABLED="true"
-          else
-            HELM_ENABLED="false"
-          fi
+          HELM_ENABLED="false"
+          [ "$HELM_ENABLED_RAW" = "true" ] && HELM_ENABLED="true"
 
           CHARTS_REPO="$(yq -r ".projects.${REPO_NAME}.helm.charts_repo // \"\"" projects.yml)"
           CHARTS_REF="$(yq -r ".projects.${REPO_NAME}.helm.charts_ref // \"main\"" projects.yml)"
           CHART_PATH="$(yq -r ".projects.${REPO_NAME}.helm.chart_path // \"\"" projects.yml)"
           VALUES_FILE="$(yq -r ".projects.${REPO_NAME}.helm.values_file // \"values.yaml\"" projects.yml)"
-
-          # --- normalize helm.update_app_version to string "true"/"false"
           UPDATE_APP_VERSION_RAW="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
-          if [ "${UPDATE_APP_VERSION_RAW}" = "true" ] || [ "${UPDATE_APP_VERSION_RAW}" = "True" ]; then
-            UPDATE_APP_VERSION="true"
-          else
-            UPDATE_APP_VERSION="false"
-          fi
+          UPDATE_APP_VERSION="false"
+          [ "$UPDATE_APP_VERSION_RAW" = "true" ] && UPDATE_APP_VERSION="true"
 
-          IMAGE_REPOSITORY="$(yq -r ".projects.${REPO_NAME}.helm.image_repository // \"\"" projects.yml)"
+          # updates list -> JSON
+          python - <<'PY' > /tmp/updates.json
+          import yaml, json
+          cfg=yaml.safe_load(open("projects.yml"))
+          p=cfg["projects"][r"""'"$REPO_NAME"'"""]
+          updates=p.get("helm",{}).get("updates",[])
+          print(json.dumps(updates))
+          PY
+
+          UPDATES_JSON="$(cat /tmp/updates.json)"
 
           {
             echo "repo_name=${REPO_NAME}"
@@ -105,11 +117,17 @@ jobs:
             echo "ref=${REF}"
 
             echo "registry=${REGISTRY}"
-            echo "image_name=${IMAGE_NAME}"
             echo "platforms=${PLATFORMS}"
-            echo "dockerfile_mode=${DF_MODE}"
-            echo "dockerfile_path=${DF_PATH}"
-            echo "build_context=${CONTEXT}"
+
+            echo "web_image_name=${WEB_IMAGE}"
+            echo "web_df_mode=${WEB_DF_MODE}"
+            echo "web_df_path=${WEB_DF_PATH}"
+            echo "web_context=${WEB_CONTEXT}"
+
+            echo "caddy_image_name=${CADDY_IMAGE}"
+            echo "caddy_df_mode=${CADDY_DF_MODE}"
+            echo "caddy_df_path=${CADDY_DF_PATH}"
+            echo "caddy_context=${CADDY_CONTEXT}"
 
             echo "helm_enabled=${HELM_ENABLED}"
             echo "charts_repo=${CHARTS_REPO}"
@@ -117,7 +135,7 @@ jobs:
             echo "chart_path=${CHART_PATH}"
             echo "values_file=${VALUES_FILE}"
             echo "update_app_version=${UPDATE_APP_VERSION}"
-            echo "image_repository=${IMAGE_REPOSITORY}"
+            echo "helm_updates_json=${UPDATES_JSON}"
           } >> "$GITHUB_OUTPUT"
 
       - id: tag
@@ -125,21 +143,19 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ steps.cfg.outputs.ref }}"
-
           if echo "$REF" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
             TAG="$REF"
           else
             TAG="sha-$(echo $GITHUB_SHA | cut -c1-7)"
           fi
-
           echo "docker_tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-  build:
+  build_web:
     needs: prepare
     uses: NSerbin/gh-pipelines/.github/workflows/docker-build.yml@main
     with:
       registry: ${{ needs.prepare.outputs.registry }}
-      repository-name: ${{ needs.prepare.outputs.image_name }}
+      repository-name: ${{ needs.prepare.outputs.web_image_name }}
       docker-tag: ${{ needs.prepare.outputs.docker_tag }}
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
       ghcr-owner: nserbin
@@ -148,16 +164,36 @@ jobs:
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
 
-      dockerfile-mode: ${{ needs.prepare.outputs.dockerfile_mode }}
-      dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
-      build-context: ${{ needs.prepare.outputs.build_context }}
+      dockerfile-mode: ${{ needs.prepare.outputs.web_df_mode }}
+      dockerfile-path: ${{ needs.prepare.outputs.web_df_path }}
+      build-context: ${{ needs.prepare.outputs.web_context }}
 
-      # IMPORTANT: docker-build reusable expects string here
       linter-fail: "true"
+    secrets: inherit
 
+  build_caddy:
+    needs: prepare
+    uses: NSerbin/gh-pipelines/.github/workflows/docker-build.yml@main
+    with:
+      registry: ${{ needs.prepare.outputs.registry }}
+      repository-name: ${{ needs.prepare.outputs.caddy_image_name }}
+      docker-tag: ${{ needs.prepare.outputs.docker_tag }}
+      docker-architecture: ${{ needs.prepare.outputs.platforms }}
+      ghcr-owner: nserbin
+
+      clone-source: true
+      source-repo: ${{ needs.prepare.outputs.source_repo }}
+      source-ref: ${{ needs.prepare.outputs.ref }}
+
+      dockerfile-mode: ${{ needs.prepare.outputs.caddy_df_mode }}
+      dockerfile-path: ${{ needs.prepare.outputs.caddy_df_path }}
+      build-context: ${{ needs.prepare.outputs.caddy_context }}
+
+      linter-fail: "true"
     secrets: inherit
 
   update_helm:
+    name: Update Helm values (image tags)
     needs: [prepare, build]
     if: ${{ needs.prepare.outputs.helm_enabled == 'true' }}
     uses: NSerbin/gh-pipelines/.github/workflows/helm-update-image-tag.yml@main
@@ -165,15 +201,17 @@ jobs:
       charts_repo: ${{ needs.prepare.outputs.charts_repo }}
       charts_ref: ${{ needs.prepare.outputs.charts_ref }}
       chart_path: ${{ needs.prepare.outputs.chart_path }}
-      values_file: ${{ needs.prepare.outputs.values_file }}
 
-      image_tag: ${{ needs.prepare.outputs.docker_tag }}
-      image_repository: ${{ needs.prepare.outputs.image_repository }}
+      updates_json: >-
+        [
+          {"file":"values.yaml","path":".image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"},
+          {"file":"values.yaml","path":".caddy.image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"}
+        ]
 
-      # pass as string, reusable handles it
       update_app_version: ${{ needs.prepare.outputs.update_app_version }}
+      app_version_value: ${{ needs.prepare.outputs.docker_tag }}
 
-      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump image"
+      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump images to ${{ needs.prepare.outputs.docker_tag }}"
     secrets:
       SYNC_APP_ID: ${{ secrets.SYNC_APP_ID }}
       SYNC_APP_PRIVATE_KEY: ${{ secrets.SYNC_APP_PRIVATE_KEY }}

@@ -2,18 +2,40 @@ projects:
   freedium-web:
     docker:
       registry: ghcr
-      image_name: freedium-web
       platforms: linux/amd64
-      dockerfile:
-        mode: source        # source | auto | fallback
-        path: Dockerfile
-      build:
-        context: .
+
+      images:
+        web:
+          image_name: freedium-web
+          dockerfile:
+            mode: source
+            path: Dockerfile
+          build:
+            context: .
+
+        caddy:
+          image_name: freedium-caddy
+          dockerfile:
+            mode: source
+            path: caddy/Dockerfile
+          build:
+            context: caddy
+
     helm:
       enabled: true
       charts_repo: "NSerbin/k3s-cluster-charts"
       charts_ref: "main"
-      chart_path: "charts/freedium"     
+      chart_path: "charts/freedium"
       values_file: "values.yaml"
       update_app_version: true
-      image_repository: "ghcr.io/nserbin/freedium-web"
+
+      # dónde actualizar en values.yaml (paths exactos)
+      updates:
+        - path: ".image.repository"
+          value: "ghcr.io/nserbin/freedium-web"
+        - path: ".image.tag"
+          valueFrom: "tag"
+        - path: ".caddy.image.repository"
+          value: "ghcr.io/nserbin/freedium-caddy"
+        - path: ".caddy.image.tag"
+          valueFrom: "tag"
