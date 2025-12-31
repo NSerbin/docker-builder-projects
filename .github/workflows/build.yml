@@ -142,7 +142,7 @@ jobs:
       dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
       build-context: ${{ needs.prepare.outputs.build_context }}
 
-      linter-fail: true
+      linter-fail: "true"
     secrets: inherit
 
   update_helm:
