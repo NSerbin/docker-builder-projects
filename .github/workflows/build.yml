@@ -76,17 +76,27 @@ jobs:
           DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path" projects.yml)"
           CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context" projects.yml)"
 
+          # --- normalize helm.enabled to string "true"/"false"
           HELM_ENABLED_RAW="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
           if [ "${HELM_ENABLED_RAW}" = "true" ] || [ "${HELM_ENABLED_RAW}" = "True" ]; then
             HELM_ENABLED="true"
           else
             HELM_ENABLED="false"
           fi
+
           CHARTS_REPO="$(yq -r ".projects.${REPO_NAME}.helm.charts_repo // \"\"" projects.yml)"
           CHARTS_REF="$(yq -r ".projects.${REPO_NAME}.helm.charts_ref // \"main\"" projects.yml)"
           CHART_PATH="$(yq -r ".projects.${REPO_NAME}.helm.chart_path // \"\"" projects.yml)"
           VALUES_FILE="$(yq -r ".projects.${REPO_NAME}.helm.values_file // \"values.yaml\"" projects.yml)"
-          UPDATE_APP_VERSION="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
+
+          # --- normalize helm.update_app_version to string "true"/"false"
+          UPDATE_APP_VERSION_RAW="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
+          if [ "${UPDATE_APP_VERSION_RAW}" = "true" ] || [ "${UPDATE_APP_VERSION_RAW}" = "True" ]; then
+            UPDATE_APP_VERSION="true"
+          else
+            UPDATE_APP_VERSION="false"
+          fi
+
           IMAGE_REPOSITORY="$(yq -r ".projects.${REPO_NAME}.helm.image_repository // \"\"" projects.yml)"
 
           {
@@ -142,7 +152,9 @@ jobs:
       dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
       build-context: ${{ needs.prepare.outputs.build_context }}
 
+      # IMPORTANT: docker-build reusable expects string here
       linter-fail: "true"
+
     secrets: inherit
 
   update_helm:
@@ -157,11 +169,11 @@ jobs:
 
       image_tag: ${{ needs.prepare.outputs.docker_tag }}
       image_repository: ${{ needs.prepare.outputs.image_repository }}
+
+      # pass as string, reusable handles it
       update_app_version: ${{ needs.prepare.outputs.update_app_version }}
 
-      commit_message: "chore(${{
-        needs.prepare.outputs.repo_name
-      }}): bump image"
+      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump image"
     secrets:
       SYNC_APP_ID: ${{ secrets.SYNC_APP_ID }}
       SYNC_APP_PRIVATE_KEY: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
