@@ -71,13 +71,25 @@ jobs:
             exit 1
           fi
 
-          # ===== Docker config =====
-          REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry" projects.yml)"
+          # ===== Docker config (defaults to avoid 'null') =====
+          REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry // \"ghcr\"" projects.yml)"
           IMAGE_NAME="$(yq -r ".projects.${REPO_NAME}.docker.image_name" projects.yml)"
-          PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms" projects.yml)"
-          DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.mode" projects.yml)"
-          DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path" projects.yml)"
-          CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context" projects.yml)"
+          PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms // \"linux/amd64\"" projects.yml)"
+
+          DF_MODE="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.mode // \"auto\"" projects.yml)"
+          DF_PATH="$(yq -r ".projects.${REPO_NAME}.docker.dockerfile.path // \"Dockerfile\"" projects.yml)"
+          CONTEXT="$(yq -r ".projects.${REPO_NAME}.docker.build.context // \".\"" projects.yml)"
+
+          # Safety: if yq returned literal "null"
+          [ "${DF_PATH}" = "null" ] && DF_PATH="Dockerfile"
+          [ "${DF_MODE}" = "null" ] && DF_MODE="auto"
+          [ "${CONTEXT}" = "null" ] && CONTEXT="."
+          [ "${PLATFORMS}" = "null" ] && PLATFORMS="linux/amd64"
+
+          if [ -z "${IMAGE_NAME}" ] || [ "${IMAGE_NAME}" = "null" ]; then
+            echo "docker.image_name is required in projects.yml for ${REPO_NAME}"
+            exit 1
+          fi
 
           # ===== Helm config (normalize to strings) =====
           HELM_ENABLED_RAW="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
@@ -100,7 +112,7 @@ jobs:
 
           if [ "${HELM_ENABLED}" = "true" ]; then
             if [ -z "${CHARTS_REPO}" ] || [ -z "${CHART_PATH}" ]; then
-              echo "helm.enabled=true but charts_repo or chart_path is empty in projects.yml"
+              echo "helm.enabled=true but charts_repo or chart_path is empty for ${REPO_NAME}"
               exit 1
             fi
           fi
@@ -158,7 +170,6 @@ jobs:
       dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
       build-context: ${{ needs.prepare.outputs.build_context }}
 
-      # your reusable expects string here
       linter-fail: "true"
     secrets: inherit
 
@@ -166,21 +177,18 @@ jobs:
     name: Update Helm chart image tags
     needs: [prepare, build]
     if: ${{ needs.prepare.outputs.helm_enabled == 'true' }}
-
     uses: NSerbin/gh-pipelines/.github/workflows/helm-update-image-tag.yml@main
     with:
       charts_repo: ${{ needs.prepare.outputs.charts_repo }}
       charts_ref: ${{ needs.prepare.outputs.charts_ref }}
       chart_path: ${{ needs.prepare.outputs.chart_path }}
 
-      # REQUIRED input in your referenced workflow
       updates_json: >-
         [
           {"file":"values.yaml","path":".image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"},
           {"file":"values.yaml","path":".caddy.image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"}
         ]
 
-      # keep boolean as string to avoid type problems
       update_app_version: ${{ needs.prepare.outputs.update_app_version }}
       app_version_value: ${{ needs.prepare.outputs.docker_tag }}
 
