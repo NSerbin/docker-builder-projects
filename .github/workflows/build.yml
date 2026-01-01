@@ -125,12 +125,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # We support two formats:
-          # A) docker.images.<key> (multi-image)
-          # B) docker.image_name + docker.dockerfile + docker.build (single image legacy)
-
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, subprocess, os, sys
+          import json, subprocess, os
 
           repo = os.environ["REPO_NAME"]
 
@@ -145,7 +141,8 @@ jobs:
             v = yq(expr)
             return v if v != "" else default
 
-          images_keys_raw = yq(f".projects.{repo}.docker.images | keys | .[]")  # newline separated or empty
+          # read keys (newline separated)
+          images_keys_raw = yq(f".projects.{repo}.docker.images | keys | .[]")
           keys = [k.strip() for k in images_keys_raw.splitlines() if k.strip()]
 
           arr = []
@@ -159,7 +156,6 @@ jobs:
                 "build_context": get(f".projects.{repo}.docker.images.{k}.build.context", "."),
               })
           else:
-            # legacy single image
             arr.append({
               "key": "default",
               "repository_name": get(f".projects.{repo}.docker.image_name", repo),
@@ -168,12 +164,10 @@ jobs:
               "build_context": get(f".projects.{repo}.docker.build.context", "."),
             })
 
-          # sanity
+          # keep only valid entries
           arr = [x for x in arr if x.get("repository_name")]
-          if not arr:
-            print("matrix_images=[]")
-            sys.exit(0)
 
+          # ALWAYS output valid JSON array (even empty)
           print("matrix_images=" + json.dumps(arr, separators=(",",":")))
           PY
 
@@ -184,7 +178,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # normalize bool-ish to "true"/"false"
           bnorm() {
             case "$1" in
               true|True|TRUE|1|yes|YES|on|ON) echo "true" ;;
@@ -203,7 +196,7 @@ jobs:
           UPDATE_APP_VERSION_RAW="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
           UPDATE_APP_VERSION="$(bnorm "$UPDATE_APP_VERSION_RAW")"
 
-          # IMPORTANT: updates must be JSON, single line, or empty []
+          # JSON one-liner or []
           UPDATES_JSON="$(yq -o=json -I=0 ".projects.${REPO_NAME}.helm.updates // []" projects.yml)"
 
           {
@@ -254,9 +247,9 @@ jobs:
 
       image_tag: ${{ needs.prepare.outputs.docker_tag }}
       updates_json: ${{ needs.prepare.outputs.updates_json }}
-      update_app_version: ${{ needs.prepare.outputs.update_app_version }}
 
-      commit_message: "chore(${{
-        needs.prepare.outputs.repo_name
-      }}): bump images"
+      # ✅ FIX: pass boolean, not string
+      update_app_version: ${{ needs.prepare.outputs.update_app_version == 'true' }}
+
+      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump images"
     secrets: inherit
