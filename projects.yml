@@ -39,3 +39,5 @@ projects:
           value: "ghcr.io/nserbin/freedium-caddy"
         - path: ".caddy.image.tag"
           valueFrom: "tag"
+
+

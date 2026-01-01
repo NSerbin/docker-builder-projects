@@ -1,4 +1,4 @@
-name: Build Docker Image
+name: Build Docker Images
 
 on:
   repository_dispatch:
@@ -8,11 +8,11 @@ on:
     inputs:
       repo_name:
         description: "Repo name (must exist in projects.yml)"
-        required: true
+        required: false
         type: string
       source_repo:
         description: "ORG/REPO"
-        required: true
+        required: false
         type: string
       ref:
         description: "Git ref (branch / tag / sha)"
@@ -33,12 +33,9 @@ jobs:
       ref: ${{ steps.cfg.outputs.ref }}
 
       registry: ${{ steps.cfg.outputs.registry }}
-      image_name: ${{ steps.cfg.outputs.image_name }}
       platforms: ${{ steps.cfg.outputs.platforms }}
-      dockerfile_mode: ${{ steps.cfg.outputs.dockerfile_mode }}
-      dockerfile_path: ${{ steps.cfg.outputs.dockerfile_path }}
-      build_context: ${{ steps.cfg.outputs.build_context }}
-      docker_tag: ${{ steps.tag.outputs.docker_tag }}
+
+      images: ${{ steps.cfg.outputs.images }}
 
       helm_enabled: ${{ steps.cfg.outputs.helm_enabled }}
       charts_repo: ${{ steps.cfg.outputs.charts_repo }}
@@ -46,16 +43,18 @@ jobs:
       chart_path: ${{ steps.cfg.outputs.chart_path }}
       values_file: ${{ steps.cfg.outputs.values_file }}
       update_app_version: ${{ steps.cfg.outputs.update_app_version }}
-      image_repository: ${{ steps.cfg.outputs.image_repository }}
+
+      docker_tag: ${{ steps.tag.outputs.docker_tag }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yq (pinned)
+      - name: Install yq
         run: |
           set -euo pipefail
           YQ_VERSION="v4.45.4"
-          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
@@ -64,58 +63,36 @@ jobs:
         env:
           REPO_NAME: ${{ github.event.client_payload.repo_name || github.event.inputs.repo_name }}
           SOURCE_REPO: ${{ github.event.client_payload.source_repo || github.event.inputs.source_repo }}
-          REF: ${{ github.event.client_payload.ref || github.event.inputs.ref }}
+          REF: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
         run: |
           set -euo pipefail
+
+          if [ -z "${REPO_NAME}" ]; then
+            echo "repo_name is required"
+            exit 1
+          fi
 
           if ! yq -e ".projects.${REPO_NAME}" projects.yml >/dev/null; then
             echo "Project ${REPO_NAME} not found in projects.yml"
             exit 1
           fi
 
-          # Helper: yq raw -> default if empty/null
-          get() {
-            local expr="$1"
-            local def="$2"
-            local out
-            out="$(yq -r "$expr" projects.yml 2>/dev/null || true)"
-            if [ -z "$out" ] || [ "$out" = "null" ]; then
-              echo "$def"
-            else
-              echo "$out"
-            fi
-          }
+          REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry // \"ghcr\"" projects.yml)"
+          PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms // \"linux/amd64\"" projects.yml)"
 
-          # Helper: normalize bool-ish to "true"/"false"
-          bnorm() {
-            case "$1" in
-              true|True|TRUE|1|yes|YES|on|ON) echo "true" ;;
-              *) echo "false" ;;
-            esac
-          }
+          IMAGES_JSON="$(yq -o=json ".projects.${REPO_NAME}.docker.images" projects.yml)"
 
-          # ===== Docker config (all STRINGS, never null) =====
-          REGISTRY="$(get ".projects.${REPO_NAME}.docker.registry" "ghcr")"
-          IMAGE_NAME="$(get ".projects.${REPO_NAME}.docker.image_name" "${REPO_NAME}")"
-          PLATFORMS="$(get ".projects.${REPO_NAME}.docker.platforms" "linux/amd64")"
+          if [ "$IMAGES_JSON" = "null" ]; then
+            echo "No docker.images defined for ${REPO_NAME}"
+            exit 1
+          fi
 
-          DF_MODE="$(get ".projects.${REPO_NAME}.docker.dockerfile.mode" "source")"
-          DF_PATH="$(get ".projects.${REPO_NAME}.docker.dockerfile.path" "Dockerfile")"
-          CONTEXT="$(get ".projects.${REPO_NAME}.docker.build.context" ".")"
-
-          # ===== Helm config (strings, normalized) =====
-          HELM_ENABLED_RAW="$(get ".projects.${REPO_NAME}.helm.enabled" "false")"
-          HELM_ENABLED="$(bnorm "$HELM_ENABLED_RAW")"
-
-          CHARTS_REPO="$(get ".projects.${REPO_NAME}.helm.charts_repo" "")"
-          CHARTS_REF="$(get ".projects.${REPO_NAME}.helm.charts_ref" "main")"
-          CHART_PATH="$(get ".projects.${REPO_NAME}.helm.chart_path" "")"
-          VALUES_FILE="$(get ".projects.${REPO_NAME}.helm.values_file" "values.yaml")"
-
-          UPDATE_APP_VERSION_RAW="$(get ".projects.${REPO_NAME}.helm.update_app_version" "false")"
-          UPDATE_APP_VERSION="$(bnorm "$UPDATE_APP_VERSION_RAW")"
-
-          IMAGE_REPOSITORY="$(get ".projects.${REPO_NAME}.helm.image_repository" "")"
+          HELM_ENABLED="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
+          CHARTS_REPO="$(yq -r ".projects.${REPO_NAME}.helm.charts_repo // \"\"" projects.yml)"
+          CHARTS_REF="$(yq -r ".projects.${REPO_NAME}.helm.charts_ref // \"main\"" projects.yml)"
+          CHART_PATH="$(yq -r ".projects.${REPO_NAME}.helm.chart_path // \"\"" projects.yml)"
+          VALUES_FILE="$(yq -r ".projects.${REPO_NAME}.helm.values_file // \"values.yaml\"" projects.yml)"
+          UPDATE_APP_VERSION="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
 
           {
             echo "repo_name=${REPO_NAME}"
@@ -123,11 +100,8 @@ jobs:
             echo "ref=${REF}"
 
             echo "registry=${REGISTRY}"
-            echo "image_name=${IMAGE_NAME}"
             echo "platforms=${PLATFORMS}"
-            echo "dockerfile_mode=${DF_MODE}"
-            echo "dockerfile_path=${DF_PATH}"
-            echo "build_context=${CONTEXT}"
+            echo "images=${IMAGES_JSON}"
 
             echo "helm_enabled=${HELM_ENABLED}"
             echo "charts_repo=${CHARTS_REPO}"
@@ -135,47 +109,37 @@ jobs:
             echo "chart_path=${CHART_PATH}"
             echo "values_file=${VALUES_FILE}"
             echo "update_app_version=${UPDATE_APP_VERSION}"
-            echo "image_repository=${IMAGE_REPOSITORY}"
           } >> "$GITHUB_OUTPUT"
-
-          echo "=== Effective config ==="
-          cat "$GITHUB_OUTPUT"
 
       - id: tag
         name: Compute docker tag
         run: |
           set -euo pipefail
-          REF="${{ steps.cfg.outputs.ref }}"
-
-          # If ref looks like semver tag, use it; else use sha-<7>
-          if echo "$REF" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
-            TAG="$REF"
-          else
-            TAG="sha-$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          fi
-
+          TAG="sha-$(echo "${GITHUB_SHA}" | cut -c1-7)"
           echo "docker_tag=${TAG}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.images) }}
     uses: NSerbin/gh-pipelines/.github/workflows/docker-build.yml@main
     with:
       registry: ${{ needs.prepare.outputs.registry }}
-      repository-name: ${{ needs.prepare.outputs.image_name }}
+      repository-name: ${{ matrix.image.image_name }}
       docker-tag: ${{ needs.prepare.outputs.docker_tag }}
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
       ghcr-owner: nserbin
 
-      # source cloning always on for builder
       clone-source: "true"
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
 
-      dockerfile-mode: ${{ needs.prepare.outputs.dockerfile_mode }}
-      dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
-      build-context: ${{ needs.prepare.outputs.build_context }}
+      dockerfile-mode: ${{ matrix.image.dockerfile.mode }}
+      dockerfile-path: ${{ matrix.image.dockerfile.path }}
+      build-context: ${{ matrix.image.build.context }}
 
-      # hadolint should not fail your build
       linter-no-fail: "true"
     secrets: inherit
 
@@ -185,15 +149,4 @@ jobs:
     uses: NSerbin/gh-pipelines/.github/workflows/helm-update-image-tag.yml@main
     with:
       charts_repo: ${{ needs.prepare.outputs.charts_repo }}
-      charts_ref: ${{ needs.prepare.outputs.charts_ref }}
-      chart_path: ${{ needs.prepare.outputs.chart_path }}
-      values_file: ${{ needs.prepare.outputs.values_file }}
-
-      image_tag: ${{ needs.prepare.outputs.docker_tag }}
-      image_repository: ${{ needs.prepare.outputs.image_repository }}
-      update_app_version: ${{ needs.prepare.outputs.update_app_version }}
-
-      commit_message: "chore(${{
-        needs.prepare.outputs.repo_name
-      }}): bump image"
-    secrets: inherit
+      charts_ref: ${{ needs.prepare.out_
