@@ -40,4 +40,3 @@ projects:
         - path: ".caddy.image.tag"
           valueFrom: "tag"
 
-
