@@ -7,17 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       repo_name:
-        description: "Repo name (must exist in projects.yml)"
         required: false
         type: string
       source_repo:
-        description: "ORG/REPO"
         required: false
         type: string
       ref:
-        description: "Git ref (branch / tag / sha)"
         required: false
-        default: "main"
+        default: main
         type: string
 
 permissions:
@@ -34,7 +31,6 @@ jobs:
 
       registry: ${{ steps.cfg.outputs.registry }}
       platforms: ${{ steps.cfg.outputs.platforms }}
-
       images: ${{ steps.cfg.outputs.images }}
 
       helm_enabled: ${{ steps.cfg.outputs.helm_enabled }}
@@ -49,14 +45,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yq
+      - name: Install yq + jq
         run: |
           set -euo pipefail
-          YQ_VERSION="v4.45.4"
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+          sudo apt-get update -qq
+          sudo apt-get install -y jq
           yq --version
+          jq --version
 
       - id: cfg
         name: Load project config
@@ -67,25 +64,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${REPO_NAME}" ]; then
-            echo "repo_name is required"
-            exit 1
-          fi
+          [ -z "$REPO_NAME" ] && { echo "repo_name missing"; exit 1; }
 
-          if ! yq -e ".projects.${REPO_NAME}" projects.yml >/dev/null; then
-            echo "Project ${REPO_NAME} not found in projects.yml"
-            exit 1
-          fi
+          yq -e ".projects.${REPO_NAME}" projects.yml >/dev/null
 
           REGISTRY="$(yq -r ".projects.${REPO_NAME}.docker.registry // \"ghcr\"" projects.yml)"
           PLATFORMS="$(yq -r ".projects.${REPO_NAME}.docker.platforms // \"linux/amd64\"" projects.yml)"
 
-          IMAGES_JSON="$(yq -o=json ".projects.${REPO_NAME}.docker.images" projects.yml)"
-
-          if [ "$IMAGES_JSON" = "null" ]; then
-            echo "No docker.images defined for ${REPO_NAME}"
-            exit 1
-          fi
+          # 🔴 CLAVE: JSON COMPACTO EN UNA SOLA LINEA
+          IMAGES_JSON="$(yq -o=json ".projects.${REPO_NAME}.docker.images" projects.yml | jq -c '.')"
 
           HELM_ENABLED="$(yq -r ".projects.${REPO_NAME}.helm.enabled // false" projects.yml)"
           CHARTS_REPO="$(yq -r ".projects.${REPO_NAME}.helm.charts_repo // \"\"" projects.yml)"
@@ -114,9 +101,7 @@ jobs:
       - id: tag
         name: Compute docker tag
         run: |
-          set -euo pipefail
-          TAG="sha-$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          echo "docker_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "docker_tag=sha-$(echo $GITHUB_SHA | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
