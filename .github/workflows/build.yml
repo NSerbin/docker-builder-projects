@@ -53,6 +53,7 @@ jobs:
           sudo wget -qO /usr/local/bin/yq \
             https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       - id: base
         name: Load base config
@@ -71,11 +72,11 @@ jobs:
             [ "$v" = "null" ] && echo "$2" || echo "$v"
           }
 
-          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
-          echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
-          echo "ref=${REF}" >> $GITHUB_OUTPUT
-          echo "registry=$(get ".projects.${REPO_NAME}.docker.registry" ghcr)" >> $GITHUB_OUTPUT
-          echo "platforms=$(get ".projects.${REPO_NAME}.docker.platforms" linux/amd64)" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "registry=$(get ".projects.${REPO_NAME}.docker.registry" ghcr)" >> "$GITHUB_OUTPUT"
+          echo "platforms=$(get ".projects.${REPO_NAME}.docker.platforms" linux/amd64)" >> "$GITHUB_OUTPUT"
 
       - id: tag
         name: Compute docker tag
@@ -86,12 +87,17 @@ jobs:
           set -euo pipefail
 
           if echo "$REF" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "docker_tag=$REF" >> $GITHUB_OUTPUT
+            echo "docker_tag=$REF" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          SHA="$(git ls-remote https://github.com/${SOURCE_REPO}.git ${REF} | awk '{print $1}')"
-          echo "docker_tag=sha-${SHA:0:7}" >> $GITHUB_OUTPUT
+          SHA="$(git ls-remote "https://github.com/${SOURCE_REPO}.git" "${REF}" | awk '{print $1}')"
+          if [ -z "$SHA" ]; then
+            echo "Could not resolve ref '${REF}' in ${SOURCE_REPO}"
+            exit 1
+          fi
+
+          echo "docker_tag=sha-${SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - id: matrix
         name: Build images matrix
@@ -102,7 +108,7 @@ jobs:
 
           MATRIX="$(yq -o=json ".projects.${REPO_NAME}.docker.images" projects.yml)"
 
-          python <<'PY'
+          python - <<'PY' > /tmp/matrix.json
           import json,sys
           data=json.loads(sys.stdin.read())
           inc=[]
@@ -115,13 +121,16 @@ jobs:
               "build_context": v["build"]["context"]
             })
           print(json.dumps({"include":inc}))
-          PY <<< "$MATRIX" > /tmp/matrix.json
+          PY
+          <<EOF
+          $MATRIX
+          EOF
 
           {
             echo "images_matrix<<EOF"
             cat /tmp/matrix.json
             echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
       - id: helm
         name: Load helm config
@@ -130,20 +139,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          b() { [[ "$1" == "true" ]] && echo true || echo false; }
+          b() {
+            case "$1" in
+              true|True|TRUE|1|yes|YES|on|ON) echo "true" ;;
+              *) echo "false" ;;
+            esac
+          }
 
-          echo "helm_enabled=$(b "$(yq -r ".projects.${REPO_NAME}.helm.enabled" projects.yml)")" >> $GITHUB_OUTPUT
-          echo "charts_repo=$(yq -r ".projects.${REPO_NAME}.helm.charts_repo" projects.yml)" >> $GITHUB_OUTPUT
-          echo "charts_ref=$(yq -r ".projects.${REPO_NAME}.helm.charts_ref" projects.yml)" >> $GITHUB_OUTPUT
-          echo "chart_path=$(yq -r ".projects.${REPO_NAME}.helm.chart_path" projects.yml)" >> $GITHUB_OUTPUT
-          echo "values_file=$(yq -r ".projects.${REPO_NAME}.helm.values_file" projects.yml)" >> $GITHUB_OUTPUT
-          echo "update_app_version=$(b "$(yq -r ".projects.${REPO_NAME}.helm.update_app_version" projects.yml)")" >> $GITHUB_OUTPUT
+          HELM_ENABLED_RAW="$(yq -r ".projects.${REPO_NAME}.helm.enabled" projects.yml)"
+          UPDATE_APP_VERSION_RAW="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version" projects.yml)"
+
+          echo "helm_enabled=$(b "${HELM_ENABLED_RAW}")" >> "$GITHUB_OUTPUT"
+          echo "charts_repo=$(yq -r ".projects.${REPO_NAME}.helm.charts_repo" projects.yml)" >> "$GITHUB_OUTPUT"
+          echo "charts_ref=$(yq -r ".projects.${REPO_NAME}.helm.charts_ref" projects.yml)" >> "$GITHUB_OUTPUT"
+          echo "chart_path=$(yq -r ".projects.${REPO_NAME}.helm.chart_path" projects.yml)" >> "$GITHUB_OUTPUT"
+          echo "values_file=$(yq -r ".projects.${REPO_NAME}.helm.values_file" projects.yml)" >> "$GITHUB_OUTPUT"
+          echo "update_app_version=$(b "${UPDATE_APP_VERSION_RAW}")" >> "$GITHUB_OUTPUT"
 
           {
             echo "updates_json<<EOF"
             yq -o=json ".projects.${REPO_NAME}.helm.updates" projects.yml
             echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -154,16 +171,21 @@ jobs:
     with:
       registry: ${{ needs.prepare.outputs.registry }}
       ghcr-owner: nserbin
+
       repository-name: ${{ matrix.image_name }}
       docker-tag: ${{ needs.prepare.outputs.docker_tag }}
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
+
       clone-source: true
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
+
       dockerfile-mode: ${{ matrix.dockerfile_mode }}
       dockerfile-path: ${{ matrix.dockerfile_path }}
       build-context: ${{ matrix.build_context }}
-      linter-fail: true
+
+      # 👇 ESTE ES EL INPUT CORRECTO (NO "linter-fail")
+      linter-no-fail: "true"
     secrets: inherit
 
   update_helm:
@@ -175,9 +197,11 @@ jobs:
       charts_ref: ${{ needs.prepare.outputs.charts_ref }}
       chart_path: ${{ needs.prepare.outputs.chart_path }}
       values_file: ${{ needs.prepare.outputs.values_file }}
+
       image_tag: ${{ needs.prepare.outputs.docker_tag }}
       updates_json: ${{ needs.prepare.outputs.updates_json }}
       update_app_version: ${{ needs.prepare.outputs.update_app_version }}
+
       commit_message: "chore(${{
         needs.prepare.outputs.repo_name
       }}): bump images"
