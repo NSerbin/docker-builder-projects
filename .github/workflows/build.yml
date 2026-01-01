@@ -24,7 +24,7 @@ permissions:
   contents: write
   packages: write
 
-# IMPORTANTE: evita doble-run por mismo repo/ref
+# evita dobles runs para mismo repo/ref
 concurrency:
   group: builder-${{ github.event.client_payload.repo_name || github.event.inputs.repo_name }}-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
   cancel-in-progress: true
@@ -126,7 +126,7 @@ jobs:
           set -euo pipefail
 
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, subprocess, os, sys
+          import json, subprocess, os
 
           repo = os.environ["REPO_NAME"]
 
@@ -152,6 +152,10 @@ jobs:
                 "dockerfile_mode": get(f".projects.{repo}.docker.images.{k}.dockerfile.mode", "source"),
                 "dockerfile_path": get(f".projects.{repo}.docker.images.{k}.dockerfile.path", "Dockerfile"),
                 "build_context": get(f".projects.{repo}.docker.images.{k}.build.context", "."),
+                # Optional: inject static assets into final image (CI wrapper)
+                "inject_static": get(f".projects.{repo}.docker.images.{k}.inject_static.enabled", "false"),
+                "inject_static_source_dir": get(f".projects.{repo}.docker.images.{k}.inject_static.source_dir", ""),
+                "inject_static_target_dir": get(f".projects.{repo}.docker.images.{k}.inject_static.target_dir", "static"),
               })
           else:
             # legacy single image
@@ -161,6 +165,9 @@ jobs:
               "dockerfile_mode": get(f".projects.{repo}.docker.dockerfile.mode", "source"),
               "dockerfile_path": get(f".projects.{repo}.docker.dockerfile.path", "Dockerfile"),
               "build_context": get(f".projects.{repo}.docker.build.context", "."),
+              "inject_static": "false",
+              "inject_static_source_dir": "",
+              "inject_static_target_dir": "static",
             })
 
           arr = [x for x in arr if x.get("repository_name")]
@@ -208,7 +215,6 @@ jobs:
   build:
     name: Build images
     needs: prepare
-    # si matrix_images está vacío, no corre
     if: ${{ needs.prepare.outputs.matrix_images != '[]' }}
     strategy:
       fail-fast: false
@@ -222,13 +228,20 @@ jobs:
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
       ghcr-owner: nserbin
 
-      clone-source: true
+      clone-source: "true"
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
 
       dockerfile-mode: ${{ matrix.img.dockerfile_mode }}
       dockerfile-path: ${{ matrix.img.dockerfile_path }}
       build-context: ${{ matrix.img.build_context }}
+
+      # static injection (solo para caddy)
+      inject-static: ${{ matrix.img.inject_static }}
+      inject-static-source-dir: ${{ matrix.img.inject_static_source_dir }}
+      inject-static-target-dir: ${{ matrix.img.inject_static_target_dir }}
+      inject-static-dest-path: "/static"
+
     secrets: inherit
 
   update_helm:
@@ -245,10 +258,8 @@ jobs:
       image_tag: ${{ needs.prepare.outputs.docker_tag }}
       updates_json: ${{ needs.prepare.outputs.updates_json }}
 
-      # boolean REAL (evita "Unexpected value 'true'")
+      # boolean real para evitar "Unexpected value 'true'"
       update_app_version: ${{ needs.prepare.outputs.update_app_version == 'true' }}
 
-      commit_message: "chore(${{
-        needs.prepare.outputs.repo_name
-      }}): bump images"
+      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump images"
     secrets: inherit

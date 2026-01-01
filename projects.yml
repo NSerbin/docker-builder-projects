@@ -3,7 +3,6 @@ projects:
     docker:
       registry: ghcr
       platforms: linux/amd64
-
       images:
         web:
           image_name: freedium-web
@@ -20,6 +19,11 @@ projects:
             path: caddy/Dockerfile
           build:
             context: caddy
+
+          inject_static:
+            enabled: true
+            source_dir: "caddy/static"   # <- desde el root del repo clonado
+            target_dir: "static"         # <- dentro del build context staging
 
     helm:
       enabled: true
