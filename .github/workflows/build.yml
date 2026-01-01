@@ -24,6 +24,7 @@ permissions:
   contents: write
   packages: write
 
+# IMPORTANTE: evita doble-run por mismo repo/ref
 concurrency:
   group: builder-${{ github.event.client_payload.repo_name || github.event.inputs.repo_name }}-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
   cancel-in-progress: true
@@ -80,7 +81,6 @@ jobs:
             exit 1
           fi
 
-          # Helper: yq raw -> default if empty/null
           get() {
             local expr="$1"
             local def="$2"
@@ -126,14 +126,12 @@ jobs:
           set -euo pipefail
 
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, subprocess, os
+          import json, subprocess, os, sys
 
           repo = os.environ["REPO_NAME"]
 
           def yq(expr):
             r = subprocess.run(["yq","-r",expr,"projects.yml"], capture_output=True, text=True)
-            if r.returncode != 0:
-              return ""
             out = (r.stdout or "").strip()
             return "" if out in ("", "null") else out
 
@@ -141,9 +139,9 @@ jobs:
             v = yq(expr)
             return v if v != "" else default
 
-          # read keys (newline separated)
-          images_keys_raw = yq(f".projects.{repo}.docker.images | keys | .[]")
-          keys = [k.strip() for k in images_keys_raw.splitlines() if k.strip()]
+          # multi-image: docker.images.<key>
+          keys_raw = yq(f".projects.{repo}.docker.images | keys | .[]")
+          keys = [k.strip() for k in keys_raw.splitlines() if k.strip()]
 
           arr = []
           if keys:
@@ -156,6 +154,7 @@ jobs:
                 "build_context": get(f".projects.{repo}.docker.images.{k}.build.context", "."),
               })
           else:
+            # legacy single image
             arr.append({
               "key": "default",
               "repository_name": get(f".projects.{repo}.docker.image_name", repo),
@@ -164,10 +163,7 @@ jobs:
               "build_context": get(f".projects.{repo}.docker.build.context", "."),
             })
 
-          # keep only valid entries
           arr = [x for x in arr if x.get("repository_name")]
-
-          # ALWAYS output valid JSON array (even empty)
           print("matrix_images=" + json.dumps(arr, separators=(",",":")))
           PY
 
@@ -196,7 +192,7 @@ jobs:
           UPDATE_APP_VERSION_RAW="$(yq -r ".projects.${REPO_NAME}.helm.update_app_version // false" projects.yml)"
           UPDATE_APP_VERSION="$(bnorm "$UPDATE_APP_VERSION_RAW")"
 
-          # JSON one-liner or []
+          # MUST be one-line JSON
           UPDATES_JSON="$(yq -o=json -I=0 ".projects.${REPO_NAME}.helm.updates // []" projects.yml)"
 
           {
@@ -212,6 +208,7 @@ jobs:
   build:
     name: Build images
     needs: prepare
+    # si matrix_images está vacío, no corre
     if: ${{ needs.prepare.outputs.matrix_images != '[]' }}
     strategy:
       fail-fast: false
@@ -225,7 +222,7 @@ jobs:
       docker-architecture: ${{ needs.prepare.outputs.platforms }}
       ghcr-owner: nserbin
 
-      clone-source: "true"
+      clone-source: true
       source-repo: ${{ needs.prepare.outputs.source_repo }}
       source-ref: ${{ needs.prepare.outputs.ref }}
 
@@ -248,8 +245,10 @@ jobs:
       image_tag: ${{ needs.prepare.outputs.docker_tag }}
       updates_json: ${{ needs.prepare.outputs.updates_json }}
 
-      # ✅ FIX: pass boolean, not string
+      # boolean REAL (evita "Unexpected value 'true'")
       update_app_version: ${{ needs.prepare.outputs.update_app_version == 'true' }}
 
-      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump images"
+      commit_message: "chore(${{
+        needs.prepare.outputs.repo_name
+      }}): bump images"
     secrets: inherit
