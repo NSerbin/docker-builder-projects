@@ -149,4 +149,12 @@ jobs:
     uses: NSerbin/gh-pipelines/.github/workflows/helm-update-image-tag.yml@main
     with:
       charts_repo: ${{ needs.prepare.outputs.charts_repo }}
-      charts_ref: ${{ needs.prepare.out_
+      charts_ref: ${{ needs.prepare.outputs.charts_ref }}
+      chart_path: ${{ needs.prepare.outputs.chart_path }}
+      values_file: ${{ needs.prepare.outputs.values_file }}
+
+      image_tag: ${{ needs.prepare.outputs.docker_tag }}
+      update_app_version: ${{ needs.prepare.outputs.update_app_version }}
+
+      commit_message: "chore(freedium): bump images"
+    secrets: inherit
