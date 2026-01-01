@@ -98,7 +98,6 @@ jobs:
           CHARTS_REF="$(yq -r ".projects.${REPO_NAME}.helm.charts_ref // \"main\"" projects.yml)"
           CHART_PATH="$(yq -r ".projects.${REPO_NAME}.helm.chart_path // \"\"" projects.yml)"
 
-          # sanity when helm enabled
           if [ "${HELM_ENABLED}" = "true" ]; then
             if [ -z "${CHARTS_REPO}" ] || [ -z "${CHART_PATH}" ]; then
               echo "helm.enabled=true but charts_repo or chart_path is empty in projects.yml"
@@ -129,16 +128,6 @@ jobs:
         name: Compute docker tag
         run: |
           set -euo pipefail
-
-          # IMPORTANT:
-          # - In repository_dispatch, github.sha is the commit in THIS repo (builder-projects),
-          #   so we should NOT use github.sha.
-          # - We'll generate tag based on input ref:
-          #     - if ref is semver tag -> use it
-          #     - else -> sha-<short of SOURCE ref> is not available without fetching.
-          #   We'll use sha-<short of run id> to avoid collisions OR keep using sha-<short builder sha>.
-          #
-          # Better approach: tag by ref if tag, else by builder sha short (still unique enough per run).
           REF="${{ steps.cfg.outputs.ref }}"
 
           if echo "$REF" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
@@ -169,38 +158,33 @@ jobs:
       dockerfile-path: ${{ needs.prepare.outputs.dockerfile_path }}
       build-context: ${{ needs.prepare.outputs.build_context }}
 
-      # hadolint no-fail (string input in your reusable)
+      # your reusable expects string here
       linter-fail: "true"
     secrets: inherit
 
   update_helm:
     name: Update Helm chart image tags
     needs: [prepare, build]
+    if: ${{ needs.prepare.outputs.helm_enabled == 'true' }}
 
-    # DO NOT use `if:` here (it can cause "0s" planning issues with reusable workflows).
-    # We'll pass helm_enabled and the reusable decides to exit early.
     uses: NSerbin/gh-pipelines/.github/workflows/helm-update-image-tag.yml@main
     with:
       charts_repo: ${{ needs.prepare.outputs.charts_repo }}
       charts_ref: ${{ needs.prepare.outputs.charts_ref }}
       chart_path: ${{ needs.prepare.outputs.chart_path }}
 
-      # REQUIRED by the reusable (as per your error)
-      # We update BOTH app and caddy tags (adjust keys to your actual values.yaml layout)
+      # REQUIRED input in your referenced workflow
       updates_json: >-
         [
           {"file":"values.yaml","path":".image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"},
           {"file":"values.yaml","path":".caddy.image.tag","value":"${{ needs.prepare.outputs.docker_tag }}","type":"str"}
         ]
 
-      # Tell reusable whether to actually apply changes (it should exit 0 if false)
-      helm_enabled: ${{ needs.prepare.outputs.helm_enabled }}
-
-      # Optional: only if your reusable supports it
+      # keep boolean as string to avoid type problems
       update_app_version: ${{ needs.prepare.outputs.update_app_version }}
       app_version_value: ${{ needs.prepare.outputs.docker_tag }}
 
-      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump images"
+      commit_message: "chore(${{ needs.prepare.outputs.repo_name }}): bump image"
     secrets:
       SYNC_APP_ID: ${{ secrets.SYNC_APP_ID }}
       SYNC_APP_PRIVATE_KEY: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
